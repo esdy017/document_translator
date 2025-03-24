@@ -31,7 +31,7 @@ class DocumentTranslator:
         self.client = Mistral(api_key=self.api_key)
         self.api_model = "mistral-ocr-latest"
         self.file_type = None
-        self.target_languages = None
+        self.target_language = None
         self.uploaded_files = None
 
     def initialize_session_state(self):
@@ -49,7 +49,7 @@ class DocumentTranslator:
         st.title("Translate Your Document")
 
         self.file_type = st.radio("Document Type", ["PDF", "Image"])
-        self.target_languages = st.selectbox("Select a Target Language", [
+        self.target_language = st.selectbox("Select a Target Language", [
             "French", "Spanish", "German", "Italian",
             "Chinese", "Japanese", "Korean", "Russian",
             "English"
@@ -124,24 +124,56 @@ class DocumentTranslator:
         except Exception as e:
             return f"OCR Error: {str(e)}"
 
-    def display_results(self, file_type):
-        for idx, result in enumerate(st.session_state["ocr_results"]):
-            col1, col2 = st.columns(2)
+    def translate_content(self, client, text, target_language):
+        try:
+            response = client.chat.complete(
+                model="mistral-large-latest",
+                messages=[{
+                    "role": "user",
+                    "content": f"Translate to {target_language} preserving formatting and images:\n\n{text}"
+                }]
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            return f"Translation Error: {str(e)}"
 
-            with col1:
-                st.subheader("Original Preview")
-                if idx < len(st.session_state.preview_src):
-                    display_document_preview(st.session_state.preview_src[idx])
+    def display_results(self, target_language):
+        for idx, translated in enumerate(st.session_state.translation_results):
+            with st.expander(f"Document {idx + 1} - Full Translation", expanded=True):
+                col1, col2 = st.columns(2)
 
-            with col2:
-                st.subheader(f"OCR Results {idx + 1}")
-                st.markdown(result, unsafe_allow_html=True)
+                with col1:
+                    st.subheader("Original Preview")
+                    if idx < len(st.session_state.preview_src):
+                        display_document_preview(st.session_state.preview_src[idx])
 
-                st.subheader("Download Options")
-                json_data = json.dumps({"ocr_result": result}, ensure_ascii=False, indent=2)
-                create_download_link(json_data, "application/json", f"Output_{idx + 1}.json")
-                create_download_link(result, "text/plain", f"Output_{idx + 1}.txt")
-                create_download_link(result, "text/markdown", f"Output_{idx + 1}.md")
+                with col2:
+                    st.subheader(f"Translated Content ({target_language})")
+                    st.markdown(translated, unsafe_allow_html=True)
+
+                    st.subheader("Download Options")
+                    json_data = json.dumps({"ocr_result": translated}, ensure_ascii=False, indent=2)
+                    st.download_button(
+                        label="Download Markdown",
+                        data=translated,
+                        file_name=f"translated_{idx + 1}.md",
+                        mime="text/markdown"
+                    )
+                    st.download_button(
+                        label="Download JSON",
+                        data=json_data,
+                        file_name=f"translated_{idx + 1}.json",
+                        mime="application/json"
+                    )
+                    st.download_button(
+                        label="Download Text",
+                        data=translated,
+                        file_name=f"translated_{idx + 1}.txt",
+                        mime="text/plain"
+                    )
+                    # create_download_link(result, "text/plain", f"Output_{idx + 1}.txt")
+                    # create_download_link(result, "text/markdown", f"Output_{idx + 1}.md")
+                    # create_download_link(json_data, "application/json", f"Output_{idx + 1}.json")
 
     def main(self):
         self.configure_page()
@@ -188,9 +220,40 @@ class DocumentTranslator:
                         st.error(f"OCR failed: {str(e)}")
                         continue
 
+            # Translation
+            for idx, file in enumerate(self.uploaded_files):
+                if idx >= len(st.session_state.ocr_results):
+                    continue
+
+                with st.status(f"Translating {file.name}...", expanded=True):
+                    try:
+                        # Get OCR result
+                        ocr_text = st.session_state.ocr_results[idx]
+
+                        # Show preview again
+                        st.write("📄 Original Content Preview:")
+                        st.markdown(ocr_text[:500] + "...", unsafe_allow_html=True)
+
+                        # Perform translation
+                        st.write(f"🌍 Translating to {self.target_language}...")
+                        translated = self.translate_content(self.client, ocr_text, self.target_language)
+                        st.session_state.translation_results.append(translated)
+
+                        # Show translation preview
+                        st.write("✅ Translation Complete:")
+                        st.markdown(translated[:500] + "...", unsafe_allow_html=True)
+
+                        # Update processing state
+                        st.session_state.processing_steps[idx]["translation_done"] = True
+
+                    except Exception as e:
+                        st.error(f"Translation failed: {str(e)}")
+
             # Display results if available
-            if st.session_state["ocr_results"]:
-                self.display_results(self.file_type)
+            if st.session_state.translation_results:
+                st.divider()
+                st.header("Final Results")
+                self.display_results(self.target_language)
 
 
 if __name__ == "__main__":
