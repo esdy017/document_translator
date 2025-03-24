@@ -29,7 +29,8 @@ class DocumentTranslator:
     def __init__(self):
         self.api_key = os.getenv("MISTRAL_API_KEY")
         self.client = Mistral(api_key=self.api_key)
-        self.api_model = "mistral-ocr-latest"
+        self.ocr_model = "mistral-ocr-latest"
+        self.chat_model = "mistral-large-latest"
         self.file_type = None
         self.target_language = None
         self.uploaded_files = None
@@ -102,7 +103,7 @@ class DocumentTranslator:
     def ocr_processing(self, client, document):
         try:
             ocr_response = client.ocr.process(
-                model=self.api_model,
+                model=self.ocr_model,
                 document=document,
                 include_image_base64=True
             )
@@ -127,7 +128,7 @@ class DocumentTranslator:
     def translate_content(self, client, text, target_language):
         try:
             response = client.chat.complete(
-                model="mistral-large-latest",
+                model=self.chat_model,
                 messages=[{
                     "role": "user",
                     "content": f"Translate to {target_language} preserving formatting and images:\n\n{text}"
@@ -171,9 +172,6 @@ class DocumentTranslator:
                         file_name=f"translated_{idx + 1}.txt",
                         mime="text/plain"
                     )
-                    # create_download_link(result, "text/plain", f"Output_{idx + 1}.txt")
-                    # create_download_link(result, "text/markdown", f"Output_{idx + 1}.md")
-                    # create_download_link(json_data, "application/json", f"Output_{idx + 1}.json")
 
     def main(self):
         self.configure_page()
@@ -208,8 +206,8 @@ class DocumentTranslator:
                         st.session_state.preview_src.append(processed["preview_src"])
 
                         # Show preview immediately
-                        st.write("📄 Document Preview:")
-                        display_document_preview(processed["preview_src"])
+                        # st.write("📄 Document Preview:")
+                        # display_document_preview(processed["preview_src"])
 
                         # Store processing state
                         st.session_state.processing_steps[idx] = {
@@ -249,11 +247,11 @@ class DocumentTranslator:
                     except Exception as e:
                         st.error(f"Translation failed: {str(e)}")
 
-            # Display results if available
-            if st.session_state.translation_results:
-                st.divider()
-                st.header("Final Results")
-                self.display_results(self.target_language)
+        # Display results if available
+        if st.session_state.translation_results:
+            st.divider()
+            st.header("Final Results")
+            self.display_results(self.target_language)
 
 
 if __name__ == "__main__":
