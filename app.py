@@ -12,6 +12,17 @@ from mistralai import Mistral
 load_dotenv()
 
 
+def initialize_session_state():
+    if "ocr_results" not in st.session_state:
+        st.session_state.ocr_results = []
+    if "translation_results" not in st.session_state:
+        st.session_state.translation_results = []
+    if "preview_src" not in st.session_state:
+        st.session_state.preview_src = []
+    if "processing_steps" not in st.session_state:
+        st.session_state.processing_steps = {}
+
+
 def display_document_preview(preview_src):
     with st.container():
         st.subheader("Document Preview")
@@ -19,10 +30,81 @@ def display_document_preview(preview_src):
             st.image(img_src, caption=f"Page {page_num + 1}")
 
 
-def create_download_link(data, filetype, filename):
-    b64 = base64.b64encode(data.encode()).decode()
-    href = f'<a href="data:{filetype};base64,{b64}" download="{filename}">Download {filename}</a>'
-    st.markdown(href, unsafe_allow_html=True)
+def process_pdf(source):
+    file_bytes = source.read()
+    doc = fitz.open(stream=file_bytes, filetype="pdf")
+
+    page_images = []
+    for page in doc:
+        pix = page.get_pixmap(dpi=150)
+        img_bytes = pix.tobytes("png")
+        base64_image = base64.b64encode(img_bytes).decode("utf-8")
+        page_images.append(f"data:image/png;base64,{base64_image}")
+
+    return {
+        "document": {
+            "type": "document_url",
+            "document_url": f"data:application/pdf;base64,{base64.b64encode(file_bytes).decode('utf-8')}"
+        },
+        "preview_src": page_images,
+        "file_bytes": None
+    }
+
+
+def process_image(source):
+    # Read uploaded image file
+    file_bytes = source.read()
+
+    # Get MIME type from uploaded file
+    mime_type = source.type  # e.g. "image/jpeg" or "image/png"
+
+    # Create base64 encoded version for preview
+    encoded_image = base64.b64encode(file_bytes).decode("utf-8")
+
+    return {
+        "document": {
+            "type": "image_url",
+            "image_url": f"data:{mime_type};base64,{encoded_image}"
+        },
+        "preview_src": [f"data:{mime_type};base64,{encoded_image}"],
+        "file_bytes": file_bytes
+    }
+
+
+def display_results(target_language):
+    for idx, translated in enumerate(st.session_state.translation_results):
+        with st.expander(f"Document {idx + 1} - Full Translation", expanded=True):
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.subheader("Original Preview")
+                if idx < len(st.session_state.preview_src):
+                    display_document_preview(st.session_state.preview_src[idx])
+
+            with col2:
+                st.subheader(f"Translated Content ({target_language})")
+                st.markdown(translated, unsafe_allow_html=True)
+
+                st.subheader("Download Options")
+                json_data = json.dumps({"ocr_result": translated}, ensure_ascii=False, indent=2)
+                st.download_button(
+                    label="Download Markdown",
+                    data=translated,
+                    file_name=f"translated_{idx + 1}.md",
+                    mime="text/markdown"
+                )
+                st.download_button(
+                    label="Download JSON",
+                    data=json_data,
+                    file_name=f"translated_{idx + 1}.json",
+                    mime="application/json"
+                )
+                st.download_button(
+                    label="Download Text",
+                    data=translated,
+                    file_name=f"translated_{idx + 1}.txt",
+                    mime="text/plain"
+                )
 
 
 class DocumentTranslator:
@@ -34,16 +116,6 @@ class DocumentTranslator:
         self.file_type = None
         self.target_language = None
         self.uploaded_files = None
-
-    def initialize_session_state(self):
-        if "ocr_results" not in st.session_state:
-            st.session_state.ocr_results = []
-        if "translation_results" not in st.session_state:
-            st.session_state.translation_results = []
-        if "preview_src" not in st.session_state:
-            st.session_state.preview_src = []
-        if "processing_steps" not in st.session_state:
-            st.session_state.processing_steps = {}
 
     def configure_page(self):
         st.set_page_config(layout="wide", page_title="Document Translator")
@@ -60,45 +132,6 @@ class DocumentTranslator:
             type=["pdf", "jpg", "jpeg", "png"],
             accept_multiple_files=True
         )
-
-    def process_pdf(self, source):
-        file_bytes = source.read()
-        doc = fitz.open(stream=file_bytes, filetype="pdf")
-
-        page_images = []
-        for page in doc:
-            pix = page.get_pixmap(dpi=150)
-            img_bytes = pix.tobytes("png")
-            base64_image = base64.b64encode(img_bytes).decode("utf-8")
-            page_images.append(f"data:image/png;base64,{base64_image}")
-
-        return {
-            "document": {
-                "type": "document_url",
-                "document_url": f"data:application/pdf;base64,{base64.b64encode(file_bytes).decode('utf-8')}"
-            },
-            "preview_src": page_images,
-            "file_bytes": None
-        }
-
-    def process_image(self, source):
-        # Read uploaded image file
-        file_bytes = source.read()
-
-        # Get MIME type from uploaded file
-        mime_type = source.type  # e.g. "image/jpeg" or "image/png"
-
-        # Create base64 encoded version for preview
-        encoded_image = base64.b64encode(file_bytes).decode("utf-8")
-
-        return {
-            "document": {
-                "type": "image_url",
-                "image_url": f"data:{mime_type};base64,{encoded_image}"
-            },
-            "preview_src": [f"data:{mime_type};base64,{encoded_image}"],
-            "file_bytes": file_bytes
-        }
 
     def ocr_processing(self, client, document):
         try:
@@ -138,44 +171,9 @@ class DocumentTranslator:
         except Exception as e:
             return f"Translation Error: {str(e)}"
 
-    def display_results(self, target_language):
-        for idx, translated in enumerate(st.session_state.translation_results):
-            with st.expander(f"Document {idx + 1} - Full Translation", expanded=True):
-                col1, col2 = st.columns(2)
-
-                with col1:
-                    st.subheader("Original Preview")
-                    if idx < len(st.session_state.preview_src):
-                        display_document_preview(st.session_state.preview_src[idx])
-
-                with col2:
-                    st.subheader(f"Translated Content ({target_language})")
-                    st.markdown(translated, unsafe_allow_html=True)
-
-                    st.subheader("Download Options")
-                    json_data = json.dumps({"ocr_result": translated}, ensure_ascii=False, indent=2)
-                    st.download_button(
-                        label="Download Markdown",
-                        data=translated,
-                        file_name=f"translated_{idx + 1}.md",
-                        mime="text/markdown"
-                    )
-                    st.download_button(
-                        label="Download JSON",
-                        data=json_data,
-                        file_name=f"translated_{idx + 1}.json",
-                        mime="application/json"
-                    )
-                    st.download_button(
-                        label="Download Text",
-                        data=translated,
-                        file_name=f"translated_{idx + 1}.txt",
-                        mime="text/plain"
-                    )
-
     def main(self):
         self.configure_page()
-        self.initialize_session_state()
+        initialize_session_state()
 
         if st.button("Process Documents"):
             if not self.uploaded_files:
@@ -198,7 +196,7 @@ class DocumentTranslator:
                     try:
                         # OCR Processing
                         st.write("🔍 Performing OCR...")
-                        processed = self.process_pdf(file) if self.file_type == "PDF" else self.process_image(file)
+                        processed = process_pdf(file) if self.file_type == "PDF" else process_image(file)
                         ocr_result = self.ocr_processing(self.client, processed["document"])
 
                         # Store OCR results
@@ -251,7 +249,7 @@ class DocumentTranslator:
         if st.session_state.translation_results:
             st.divider()
             st.header("Final Results")
-            self.display_results(self.target_language)
+            display_results(self.target_language)
 
 
 if __name__ == "__main__":
